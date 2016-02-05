@@ -107,6 +107,7 @@ func CloneRC(clone *cloner, rc *kapi.ReplicationController) (){
 }
 
 func CloneService(clone *cloner, svc *kapi.Service) () {
+        svc.Spec.ClusterIP = ""
 	newService := kapi.Service{
 		ObjectMeta: MakeObjectMeta(&svc.ObjectMeta),
 		Spec: svc.Spec,
