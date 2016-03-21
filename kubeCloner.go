@@ -23,27 +23,27 @@ package main // import "github.com/jmccarty3/kubeClonner"
 import (
 	"flag"
 	"fmt"
-//	"strings"
-//	"net/url"
-//	"os"
-//	"time"
-//	"reflect"
-//	"strconv"
+	//	"strings"
+	//	"net/url"
+	//	"os"
+	//	"time"
+	//	"reflect"
+	//	"strconv"
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
-//	"k8s.io/kubernetes/pkg/util"
+	//	"k8s.io/kubernetes/pkg/util"
 	"github.com/golang/glog"
 )
 
 var (
-	argSourceUrl  = flag.String("source", "", "Source URL")
-	argSinkUrl    = flag.String("sink", "", "Sink URL")
-	argConOnEror  = flag.Bool("continue_on_error", false, "Continuie Cloning on error. Useful for cloning the system namespace")
-	argRollback   = flag.Bool("rollback", false, "Rollback all changes to sink on error")
-	argNamespace  = flag.String("namespace", "", "Namespace to clone from. If blank all namespaces.")
+	argSourceUrl = flag.String("source", "", "Source URL")
+	argSinkUrl   = flag.String("sink", "", "Sink URL")
+	argConOnEror = flag.Bool("continue_on_error", false, "Continuie Cloning on error. Useful for cloning the system namespace")
+	argRollback  = flag.Bool("rollback", false, "Rollback all changes to sink on error")
+	argNamespace = flag.String("namespace", "", "Namespace to clone from. If blank all namespaces.")
 )
 
 type cloner struct {
@@ -58,21 +58,24 @@ type cloner struct {
 
 	//All Services.
 	svc []kapi.ObjectMeta
+
+	//Namespaces
+	ns []kapi.ObjectMeta
 }
 
-func HandleError(clone *cloner, msg string)(){
+func HandleError(clone *cloner, msg string) {
 	glog.Error(msg)
 
 	if *argConOnEror {
 		return
-	}	else if *argRollback {
+	} else if *argRollback {
 		glog.Info("Performing rollback")
 
-		for _,rc := range clone.rc{
+		for _, rc := range clone.rc {
 			clone.sink.ReplicationControllers(rc.Namespace).Delete(rc.Name)
 			glog.Info("Rolled back RC: ", rc.Name)
 		}
-		for _,svc := range clone.svc{
+		for _, svc := range clone.svc {
 			clone.sink.Services(svc.Namespace).Delete(svc.Name)
 			glog.Info("Rolled back Service: ", svc.Name)
 		}
@@ -81,66 +84,82 @@ func HandleError(clone *cloner, msg string)(){
 	glog.Fatal("Exiting")
 }
 
-func MakeObjectMeta(meta *kapi.ObjectMeta)(kapi.ObjectMeta){
+func MakeObjectMeta(meta *kapi.ObjectMeta) kapi.ObjectMeta {
 	newMeta := kapi.ObjectMeta{
-		Name: meta.Name,
-		Namespace: meta.Namespace,
+		Name:                       meta.Name,
+		Namespace:                  meta.Namespace,
 		DeletionGracePeriodSeconds: meta.DeletionGracePeriodSeconds,
-		Labels: meta.Labels,
+		Labels:      meta.Labels,
 		Annotations: meta.Annotations,
 	}
 
 	return newMeta
 }
 
-func CloneRC(clone *cloner, rc *kapi.ReplicationController) (){
+func CloneRC(clone *cloner, rc *kapi.ReplicationController) {
 	newRC := kapi.ReplicationController{
 		ObjectMeta: MakeObjectMeta(&rc.ObjectMeta),
-		Spec: rc.Spec,
+		Spec:       rc.Spec,
 	}
 
-	if _,err := clone.sink.ReplicationControllers(rc.ObjectMeta.Namespace).Create(&newRC); err != nil{
+	if _, err := clone.sink.ReplicationControllers(rc.ObjectMeta.Namespace).Create(&newRC); err != nil {
 		HandleError(clone, fmt.Sprint("Failure to create RC. ", err))
 	}
 
 	clone.rc = append(clone.rc, rc.ObjectMeta)
 }
 
-func CloneService(clone *cloner, svc *kapi.Service) () {
-        svc.Spec.ClusterIP = ""
+func CloneService(clone *cloner, svc *kapi.Service) {
+	svc.Spec.ClusterIP = ""
 	newService := kapi.Service{
 		ObjectMeta: MakeObjectMeta(&svc.ObjectMeta),
-		Spec: svc.Spec,
+		Spec:       svc.Spec,
 	}
 
 	var err error
 
-	if _,err = clone.sink.Services(svc.ObjectMeta.Namespace).Create(&newService); err != nil {
+	if _, err = clone.sink.Services(svc.ObjectMeta.Namespace).Create(&newService); err != nil {
 		HandleError(clone, fmt.Sprintf("Failure to create service: %s Error: %s", newService, err))
 	}
 
 	clone.svc = append(clone.svc, svc.ObjectMeta)
 }
 
-func CloneNamespace(clone *cloner, ns string)(){
+func CloneNamespace(clone *cloner, ns string) {
 	glog.Info("Cloning Namespace: ", ns)
+
+	if oldns, err := clone.source.Namespaces().Get(ns); err == nil {
+		namespace := kapi.Namespace{
+			ObjectMeta: MakeObjectMeta(oldns.ObjectMeta),
+			Spec:       oldns.Spec,
+		}
+
+		if _, err = clone.sink.Namespaces().Create(namespace); err != nil {
+			HandleError(clone, fmt.Sprintf("Failure to create Namespace object %s Error: %s", ns, err))
+		}
+
+		clone.ns = append(clone.ns, namespace.ObjectMeta)
+	} else {
+		glog.Warningf("Unable to get namespace object for: %s.  This is normal if the namespace was not explicitly defined", ns)
+	}
+
 	svcList, err := clone.source.Services(ns).List(labels.Everything())
 
-	if err != nil{
+	if err != nil {
 		glog.Fatal("Could not get all services. ", err)
 	}
-	for _,svc := range svcList.Items{
-		if svc.ObjectMeta.Name != "kubernetes"{
+	for _, svc := range svcList.Items {
+		if svc.ObjectMeta.Name != "kubernetes" {
 			glog.Info("Cloning Service: ", svc.ObjectMeta.Name)
-			CloneService(clone,&svc)
+			CloneService(clone, &svc)
 		}
 	}
 
 	rcList, err := clone.source.ReplicationControllers(ns).List(labels.Everything())
 
-	for _,rc := range rcList.Items{
+	for _, rc := range rcList.Items {
 		glog.Info("Cloning RC: ", rc.ObjectMeta.Name)
-		CloneRC(clone,&rc)
+		CloneRC(clone, &rc)
 	}
 }
 
@@ -150,36 +169,36 @@ func main() {
 	var clone cloner
 
 	sourceConfig := &kclient.Config{
-		Host: *argSourceUrl,
+		Host:    *argSourceUrl,
 		Version: "v1",
 	}
 
 	sinkConfig := &kclient.Config{
-		Host: *argSinkUrl,
+		Host:    *argSinkUrl,
 		Version: "v1",
 	}
 
-	clone.source,err = kclient.New(sourceConfig)
+	clone.source, err = kclient.New(sourceConfig)
 
-	if err != nil{
+	if err != nil {
 		return
 	}
-	clone.sink,err = kclient.New(sinkConfig)
+	clone.sink, err = kclient.New(sinkConfig)
 
 	if err != nil {
 		return
 	}
 
-	if *argNamespace != ""{
-		CloneNamespace(&clone,*argNamespace)
+	if *argNamespace != "" {
+		CloneNamespace(&clone, *argNamespace)
 	} else {
-		ns,err := clone.source.Namespaces().List(labels.Everything(), fields.Everything())
+		ns, err := clone.source.Namespaces().List(labels.Everything(), fields.Everything())
 
 		if err != nil {
 			glog.Fatal("Unable to list all namespaces")
 		}
 
-		for _,item := range ns.Items {
+		for _, item := range ns.Items {
 			CloneNamespace(&clone, item.ObjectMeta.Name)
 		}
 
