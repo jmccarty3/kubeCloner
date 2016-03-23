@@ -18,7 +18,7 @@ limitations under the License.
 // Kubernetes master for changes in Services and creates new DNS records on the
 // consul agent.
 
-package main // import "github.com/jmccarty3/kubeClonner"
+package main
 
 import (
 	"flag"
@@ -119,7 +119,7 @@ func CloneService(clone *cloner, svc *kapi.Service) {
 	var err error
 
 	if _, err = clone.sink.Services(svc.ObjectMeta.Namespace).Create(&newService); err != nil {
-		HandleError(clone, fmt.Sprintf("Failure to create service: %s Error: %s", newService, err))
+		HandleError(clone, fmt.Sprintf("Failure to create service: %s Error: %s", newService.ObjectMeta.Name, err))
 	}
 
 	clone.svc = append(clone.svc, svc.ObjectMeta)
@@ -130,11 +130,11 @@ func CloneNamespace(clone *cloner, ns string) {
 
 	if oldns, err := clone.source.Namespaces().Get(ns); err == nil {
 		namespace := kapi.Namespace{
-			ObjectMeta: MakeObjectMeta(oldns.ObjectMeta),
+			ObjectMeta: MakeObjectMeta(&oldns.ObjectMeta),
 			Spec:       oldns.Spec,
 		}
 
-		if _, err = clone.sink.Namespaces().Create(namespace); err != nil {
+		if _, err = clone.sink.Namespaces().Create(&namespace); err != nil {
 			HandleError(clone, fmt.Sprintf("Failure to create Namespace object %s Error: %s", ns, err))
 		}
 
